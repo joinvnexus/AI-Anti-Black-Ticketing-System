@@ -66,4 +66,19 @@ export class ScoreRiskDto {
   @IsInt()
   @Min(0)
   monthlyBookingCount?: number;
+
+  @IsOptional()
+  @IsString()
+  telemetrySnapshotId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  typingSpeedCpm?: number;
+
+  @IsOptional()
+  @IsInt()
+  @Min(0)
+  @Max(100)
+  syndicateRisk?: number;
 }

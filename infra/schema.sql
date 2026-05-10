@@ -84,6 +84,7 @@ ALTER TABLE queue_tokens ADD COLUMN IF NOT EXISTS priority_score INTEGER NOT NUL
 ALTER TABLE queue_tokens ADD COLUMN IF NOT EXISTS telemetry_snapshot_id UUID;
 ALTER TABLE queue_tokens ADD COLUMN IF NOT EXISTS reservation_expires_at TIMESTAMPTZ;
 ALTER TABLE queue_tokens ADD COLUMN IF NOT EXISTS eligibility_reason TEXT;
+ALTER TABLE queue_tokens ADD COLUMN IF NOT EXISTS reservation_consumed_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS seat_holds (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -115,15 +116,22 @@ CREATE TABLE IF NOT EXISTS bookings (
 CREATE INDEX IF NOT EXISTS idx_bookings_user_id_created_at ON bookings(user_id, created_at);
 
 ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_reference TEXT;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ;
 
 CREATE TABLE IF NOT EXISTS risk_assessments (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID,
   session_id UUID,
+  subject_id TEXT,
+  subject_type TEXT,
   score INTEGER NOT NULL,
   band TEXT NOT NULL,
   reasons JSONB NOT NULL DEFAULT '[]'::jsonb,
   payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+  telemetry_snapshot_id UUID REFERENCES telemetry_snapshots(id) ON DELETE SET NULL,
+  inference_request JSONB NOT NULL DEFAULT '{}'::jsonb,
+  inference_response JSONB NOT NULL DEFAULT '{}'::jsonb,
+  model_version TEXT NOT NULL DEFAULT 'phase2-rule-v1',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -182,9 +190,11 @@ CREATE TABLE IF NOT EXISTS payment_artifacts (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   booking_id UUID REFERENCES bookings(id) ON DELETE SET NULL,
   hold_id UUID REFERENCES seat_holds(id) ON DELETE SET NULL,
+  user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   provider TEXT NOT NULL,
   payment_reference TEXT NOT NULL UNIQUE,
   authorization_reference TEXT,
+  queue_token TEXT,
   amount NUMERIC(12,2) NOT NULL DEFAULT 0,
   currency TEXT NOT NULL DEFAULT 'BDT',
   status TEXT NOT NULL DEFAULT 'initiated',

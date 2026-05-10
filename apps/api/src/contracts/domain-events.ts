@@ -3,6 +3,8 @@ export const KAFKA_TOPICS = {
   riskAssessment: 'risk.assessment.v1',
   queueState: 'queue.state.v1',
   bookingLifecycle: 'booking.lifecycle.v1',
+  paymentLifecycle: 'payment.lifecycle.v1',
+  cancellationLifecycle: 'cancellation.lifecycle.v1',
 } as const;
 
 export type KafkaTopic = (typeof KAFKA_TOPICS)[keyof typeof KAFKA_TOPICS];
@@ -65,6 +67,7 @@ export type QueueStateEvent = DomainEventEnvelope<
   | 'queue.deprioritized'
   | 'queue.eligible'
   | 'queue.reservation.issued'
+  | 'queue.reservation.consumed'
   | 'queue.expired',
   {
     token: string;
@@ -74,6 +77,23 @@ export type QueueStateEvent = DomainEventEnvelope<
     riskScore: number;
     status: string;
     expiresAt: string;
+  }
+>;
+
+export type PaymentLifecycleEvent = DomainEventEnvelope<
+  | 'payment.preauthorized'
+  | 'payment.authorized'
+  | 'payment.failed'
+  | 'payment.callback.accepted',
+  {
+    paymentReference: string;
+    holdReference?: string;
+    queueToken?: string;
+    userId: string;
+    journeyId?: string;
+    provider?: string;
+    amount?: number;
+    status: string;
   }
 >;
 
@@ -99,4 +119,5 @@ export type DomainEvent =
   | AuthVerificationEvent
   | RiskAssessmentEvent
   | QueueStateEvent
-  | BookingLifecycleEvent;
+  | BookingLifecycleEvent
+  | PaymentLifecycleEvent;

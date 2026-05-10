@@ -51,6 +51,17 @@ export class AuthRepository {
     return result.rows[0];
   }
 
+  async invalidateActiveChallenges(nidHash: string, deviceId: string) {
+    await this.databaseService.query(
+      `
+        UPDATE otp_challenges
+        SET used_at = NOW()
+        WHERE nid_hash = $1 AND device_id = $2 AND used_at IS NULL AND expires_at > NOW()
+      `,
+      [nidHash, deviceId],
+    );
+  }
+
   async findOtpChallengeById(id: string) {
     const result = await this.databaseService.query<ChallengeRecord>(
       `
@@ -112,13 +123,15 @@ export class AuthRepository {
     riskScore: number;
     expiresAt: Date;
   }) {
-    await this.databaseService.query(
+    const result = await this.databaseService.query<{ id: string }>(
       `
         INSERT INTO sessions (user_id, device_id, ip_address, risk_score, expires_at)
         VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
       `,
       [input.userId, input.deviceId, input.ipAddress, input.riskScore, input.expiresAt],
     );
+
+    return result.rows[0];
   }
 }
-

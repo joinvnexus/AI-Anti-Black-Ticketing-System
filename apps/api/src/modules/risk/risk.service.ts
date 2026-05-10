@@ -7,7 +7,7 @@ export class RiskService {
     const baseScore = Math.round(
       input.deviceRisk * 0.25 +
         input.behaviorRisk * 0.25 +
-        input.networkRisk * 0.15 +
+        Math.max(input.networkRisk, input.syndicateRisk ?? 0) * 0.15 +
         input.accountRisk * 0.15 +
         input.bookingRisk * 0.1 +
         input.paymentRisk * 0.1,

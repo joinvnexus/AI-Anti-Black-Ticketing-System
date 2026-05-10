@@ -3,7 +3,10 @@ import { randomUUID } from 'crypto';
 import { KAFKA_TOPICS, QueueStateEvent, RiskAssessmentEvent } from '../../contracts/domain-events';
 import { AuditService } from '../common/audit/audit.service';
 import { KafkaProducerService } from '../common/events/kafka-producer.service';
+import { SessionSecurityService } from '../common/security/session-security.service';
+import { FraudGraphService } from '../fraud-graph/fraud-graph.service';
 import { RiskClientService } from '../risk/risk-client.service';
+import { TelemetryService } from '../telemetry/telemetry.service';
 import { JoinQueueDto } from './dto/join-queue.dto';
 import { QueueRepository } from './queue.repository';
 
@@ -48,9 +51,18 @@ export class QueueService {
     private readonly queueRepository: QueueRepository,
     private readonly auditService: AuditService,
     private readonly kafkaProducerService: KafkaProducerService,
+    private readonly telemetryService: TelemetryService,
+    private readonly sessionSecurityService: SessionSecurityService,
+    private readonly fraudGraphService: FraudGraphService,
   ) {}
 
   async join(dto: JoinQueueDto) {
+    await this.sessionSecurityService.validate({
+      sessionId: dto.sessionId,
+      userId: dto.userId,
+      deviceId: dto.deviceId,
+    });
+
     const activeCooldown = this.queueRepository.enabled
       ? await this.queueRepository.getActiveCooldown(dto.userId, dto.journeyId)
       : null;
@@ -60,21 +72,44 @@ export class QueueService {
     const bookingLimit = this.queueRepository.enabled
       ? await this.queueRepository.getBookingLimit(dto.userId)
       : null;
+    const telemetrySnapshot = await this.telemetryService.findSnapshot(dto.telemetrySnapshotId);
+    const telemetryRiskHint: number =
+      telemetrySnapshot && 'risk_hint' in telemetrySnapshot
+        ? Number(telemetrySnapshot.risk_hint)
+        : telemetrySnapshot && 'riskHint' in telemetrySnapshot
+          ? Number(telemetrySnapshot.riskHint)
+          : 0;
+    const telemetrySignals =
+      telemetrySnapshot && 'extractedSignals' in telemetrySnapshot
+        ? Array.isArray(telemetrySnapshot.extractedSignals)
+          ? telemetrySnapshot.extractedSignals.map(String)
+          : []
+        : [];
+    const networkRisk = Math.max(
+      dto.networkRisk,
+      this.fraudGraphService.scoreAccountNetworkRisk(dto.userId, dto.deviceId),
+    );
 
     const risk = await this.riskClientService.score({
       deviceRisk: dto.deviceRisk,
       behaviorRisk: dto.behaviorRisk,
-      networkRisk: dto.networkRisk,
+      networkRisk,
       accountRisk: dto.accountRisk,
       bookingRisk: 10,
       paymentRisk: 0,
-      signals: ['queue_join'],
+      signals: ['queue_join', ...telemetrySignals],
       subjectType: 'queue',
       subjectId: dto.journeyId,
       deviceTrustScore,
-      telemetryRiskHint: 0,
+      telemetryRiskHint,
+      telemetrySnapshotId: dto.telemetrySnapshotId,
       weeklyBookingCount: bookingLimit?.weekly_booked_count ?? 0,
       monthlyBookingCount: bookingLimit?.monthly_booked_count ?? 0,
+      typingSpeedCpm:
+        telemetrySnapshot && 'typing_speed_cpm' in telemetrySnapshot
+          ? Number(telemetrySnapshot.typing_speed_cpm)
+          : 0,
+      syndicateRisk: this.fraudGraphService.scoreAccountNetworkRisk(dto.userId, dto.deviceId),
     });
 
     const limitBlocked =
@@ -125,7 +160,7 @@ export class QueueService {
         priorityScore: entry.priorityScore,
         deviceTrustScore: entry.deviceTrustScore,
         riskScore: entry.riskScore,
-        telemetrySnapshotId: entry.telemetrySnapshotId,
+      telemetrySnapshotId: entry.telemetrySnapshotId,
         eligibilityReason: entry.eligibilityReason,
         status: entryStatus,
         expiresAt: new Date(entry.expiresAt),
@@ -181,6 +216,7 @@ export class QueueService {
         riskScore: entry.riskScore,
         deviceTrustScore: entry.deviceTrustScore,
         eligibilityReason: entry.eligibilityReason,
+        telemetrySnapshotId: dto.telemetrySnapshotId ?? null,
       },
     });
 

@@ -4,6 +4,9 @@ import { BookingLifecycleEvent, KAFKA_TOPICS, RiskAssessmentEvent } from '../../
 import { AuditService } from '../common/audit/audit.service';
 import { KafkaProducerService } from '../common/events/kafka-producer.service';
 import { IdempotencyService } from '../common/security/idempotency.service';
+import { SessionSecurityService } from '../common/security/session-security.service';
+import { PaymentsRepository } from '../payments/payments.repository';
+import { QueueRepository } from '../queue/queue.repository';
 import { RiskClientService } from '../risk/risk-client.service';
 import { BookingRepository } from './booking.repository';
 import { ConfirmBookingDto } from './dto/confirm-booking.dto';
@@ -15,8 +18,8 @@ type SeatHold = {
   journeyId: string;
   queueToken: string;
   seatCount: number;
-  expiresAt: string;
-  status: 'held' | 'confirmed';
+      expiresAt: string;
+  status: 'held' | 'confirmed' | 'expired';
 };
 
 type SeatHoldView = {
@@ -24,8 +27,9 @@ type SeatHoldView = {
   userId: string;
   journeyId: string;
   seatCount: number;
-  status: 'held' | 'confirmed';
+  status: 'held' | 'confirmed' | 'expired';
   expiresAt: string;
+  queueToken?: string | null;
 };
 
 @Injectable()
@@ -38,9 +42,47 @@ export class BookingService {
     private readonly auditService: AuditService,
     private readonly kafkaProducerService: KafkaProducerService,
     private readonly idempotencyService: IdempotencyService,
+    private readonly paymentsRepository: PaymentsRepository,
+    private readonly queueRepository: QueueRepository,
+    private readonly sessionSecurityService: SessionSecurityService,
   ) {}
 
   async createHold(dto: CreateHoldDto) {
+    await this.sessionSecurityService.validate({
+      sessionId: dto.sessionId,
+      userId: dto.userId,
+      deviceId: dto.deviceId,
+    });
+
+    const queueToken = this.queueRepository.enabled
+      ? await this.queueRepository.findByToken(dto.queueToken)
+      : null;
+    const paymentArtifact = this.paymentsRepository.enabled
+      ? await this.paymentsRepository.findByPaymentReference(dto.paymentReference)
+      : null;
+
+    if (
+      this.queueRepository.enabled &&
+      (!queueToken ||
+        queueToken.user_id !== dto.userId ||
+        queueToken.journey_id !== dto.journeyId ||
+        queueToken.status !== 'reserved' ||
+        !queueToken.reservation_expires_at ||
+        queueToken.reservation_expires_at.getTime() <= Date.now())
+    ) {
+      throw new BadRequestException('Queue reservation is not active');
+    }
+
+    if (
+      this.paymentsRepository.enabled &&
+      (!paymentArtifact ||
+        paymentArtifact.user_id !== dto.userId ||
+        paymentArtifact.queue_token !== dto.queueToken ||
+        paymentArtifact.status !== 'authorized')
+    ) {
+      throw new BadRequestException('Payment pre-authorization is not accepted');
+    }
+
     const risk = await this.riskClientService.score({
       deviceRisk: 10,
       behaviorRisk: 10,
@@ -53,6 +95,14 @@ export class BookingService {
 
     if (risk.score >= 86) {
       throw new BadRequestException('Booking hold blocked by risk engine');
+    }
+
+    if (this.bookingRepository.enabled) {
+      const inventory = await this.bookingRepository.decrementJourneyAvailability(dto.journeyId, dto.seatCount);
+
+      if (!inventory) {
+        throw new BadRequestException('Insufficient seat inventory');
+      }
     }
 
     const holdReference = `hold_${randomUUID()}`;
@@ -71,9 +121,11 @@ export class BookingService {
         userId: hold.userId,
         journeyId: hold.journeyId,
         holdReference: hold.holdReference,
+        queueToken: hold.queueToken,
         seatCount: hold.seatCount,
         expiresAt: new Date(hold.expiresAt),
       });
+      await this.paymentsRepository.attachHold(dto.paymentReference, holdReference);
     } else {
       this.holds.set(holdReference, hold);
     }
@@ -91,6 +143,7 @@ export class BookingService {
         journeyId: hold.journeyId,
         seatCount: hold.seatCount,
         riskScore: risk.score,
+        paymentReference: dto.paymentReference,
         status: hold.status,
       },
     };
@@ -124,6 +177,7 @@ export class BookingService {
         journeyId: hold.journeyId,
         seatCount: hold.seatCount,
         riskScore: risk.score,
+        paymentReference: dto.paymentReference,
       },
     });
 
@@ -160,11 +214,27 @@ export class BookingService {
             seatCount: hold.seat_count,
             status: hold.status,
             expiresAt: hold.expires_at.toISOString(),
+            queueToken: hold.queue_token,
           }
         : hold;
 
     if (new Date(holdView.expiresAt).getTime() < Date.now()) {
+      if (this.bookingRepository.enabled) {
+        await this.bookingRepository.expireHold(dto.holdReference);
+        await this.bookingRepository.incrementJourneyAvailability(holdView.journeyId, holdView.seatCount);
+      }
       throw new BadRequestException('Seat hold expired');
+    }
+
+    const paymentArtifact = this.paymentsRepository.enabled
+      ? await this.paymentsRepository.findByPaymentReference(dto.paymentReference)
+      : null;
+
+    if (
+      this.paymentsRepository.enabled &&
+      (!paymentArtifact || paymentArtifact.status !== 'authorized')
+    ) {
+      throw new BadRequestException('Payment authorization required before confirmation');
     }
 
     if (this.bookingRepository.enabled) {
@@ -177,6 +247,8 @@ export class BookingService {
         totalAmount: 0,
         paymentReference: dto.paymentReference,
       });
+      await this.bookingRepository.incrementBookingLimit(holdView.userId);
+      await this.queueRepository.consumeReservation(holdView.queueToken ?? paymentArtifact?.queue_token ?? '');
 
       const response = {
         bookingId: booking.id,
@@ -262,6 +334,7 @@ export class BookingService {
       cancelledByUserId: input.cancelledByUserId,
       reason: input.reason,
     });
+    await this.bookingRepository.incrementJourneyAvailability(booking.journey_id, 1);
     const redistribution = await this.bookingRepository.createRedistribution({
       bookingId: input.bookingId,
       journeyId: booking.journey_id,
@@ -347,6 +420,7 @@ export class BookingService {
       outcome: 'success',
       metadata: {
         journeyId,
+        policy: 'eligible_bucket_only',
       },
     });
 

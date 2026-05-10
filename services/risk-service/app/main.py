@@ -17,6 +17,7 @@ class RiskPayload(BaseModel):
     device_trust_score: int = Field(default=50, ge=0, le=100)
     weekly_booking_count: int = Field(default=0, ge=0)
     monthly_booking_count: int = Field(default=0, ge=0)
+    typing_speed_cpm: int = Field(default=0, ge=0)
     subject_id: str | None = None
     subject_type: str = "queue"
     signals: list[str] = Field(default_factory=list)
@@ -27,26 +28,32 @@ class InferenceOutput(BaseModel):
     reasons: list[str] = Field(default_factory=list)
 
 
+class RiskInferenceBundle(BaseModel):
+    model_version: str
+    score: int = Field(ge=0, le=100)
+    reasons: list[str] = Field(default_factory=list)
+
+
 class RiskInferenceModel(Protocol):
-    def predict(self, payload: RiskPayload) -> InferenceOutput: ...
+    def predict(self, payload: RiskPayload) -> RiskInferenceBundle: ...
 
 
 class BotModel:
-    def predict(self, payload: RiskPayload) -> InferenceOutput:
+    def predict(self, payload: RiskPayload) -> RiskInferenceBundle:
         score = min(100, round((payload.behavior_risk + payload.telemetry_risk_hint) / 2))
         reasons: list[str] = []
 
-        if payload.typing_speed_cpm if hasattr(payload, "typing_speed_cpm") else False:
+        if payload.typing_speed_cpm >= 450:
             reasons.append("typing_pattern")
 
         if payload.telemetry_risk_hint >= 50:
             reasons.append("telemetry_spike")
 
-        return InferenceOutput(score=score, reasons=reasons)
+        return RiskInferenceBundle(model_version="bot-rules-v1", score=score, reasons=reasons)
 
 
 class AnomalyModel:
-    def predict(self, payload: RiskPayload) -> InferenceOutput:
+    def predict(self, payload: RiskPayload) -> RiskInferenceBundle:
         score = min(
             100,
             round(
@@ -63,11 +70,25 @@ class AnomalyModel:
         if payload.device_trust_score <= 30:
             reasons.append("device_trust_drop")
 
-        return InferenceOutput(score=score, reasons=reasons)
+        return RiskInferenceBundle(model_version="anomaly-rules-v1", score=score, reasons=reasons)
 
 
 bot_model: RiskInferenceModel = BotModel()
 anomaly_model: RiskInferenceModel = AnomalyModel()
+
+
+def load_models():
+    return {
+        "bot": bot_model,
+        "anomaly": anomaly_model,
+        "scaffold": {
+            "xgboost": "placeholder",
+            "pytorch": "placeholder",
+        },
+    }
+
+
+MODELS = load_models()
 
 
 @app.get("/health")
@@ -92,8 +113,8 @@ def score(payload: RiskPayload):
         round((payload.weekly_booking_count + payload.monthly_booking_count / 4) * 2),
     )
 
-    bot = bot_model.predict(payload)
-    anomaly = anomaly_model.predict(payload)
+    bot = MODELS["bot"].predict(payload)
+    anomaly = MODELS["anomaly"].predict(payload)
     score = max(
         0,
         min(100, base_score + telemetry_penalty + trust_offset + booking_pressure),
@@ -116,11 +137,17 @@ def score(payload: RiskPayload):
         "score": score,
         "band": band,
         "actions": actions,
+        "reasons": sorted(set(bot.reasons + anomaly.reasons + payload.signals)),
         "action_policy": {
             "allow": score < 71,
             "queue_bucket": 3 if score >= 71 else 2 if score >= 51 else 1,
             "requires_manual_review": score >= 86,
             "requires_step_up": score >= 51,
+        },
+        "model_registry": {
+            "bot": bot.model_version,
+            "anomaly": anomaly.model_version,
+            "scaffold": MODELS["scaffold"],
         },
         "model_findings": {
             "bot_likelihood": bot.score,

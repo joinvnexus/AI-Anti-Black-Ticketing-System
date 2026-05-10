@@ -52,6 +52,7 @@ export class RiskClientService {
           device_trust_score: input.deviceTrustScore ?? 50,
           weekly_booking_count: input.weeklyBookingCount ?? 0,
           monthly_booking_count: input.monthlyBookingCount ?? 0,
+          typing_speed_cpm: input.typingSpeedCpm ?? 0,
           subject_id: input.subjectId ?? null,
           subject_type: input.subjectType ?? 'queue',
           signals: input.signals ?? [],
@@ -75,7 +76,9 @@ export class RiskClientService {
         model_findings?: {
           bot_likelihood: number;
           anomaly_likelihood: number;
+          reasons?: string[];
         };
+        reasons?: string[];
       };
 
       return {
@@ -96,7 +99,7 @@ export class RiskClientService {
               anomalyLikelihood: payload.model_findings.anomaly_likelihood,
             }
           : undefined,
-        reasons: input.signals ?? [],
+        reasons: payload.reasons ?? payload.model_findings?.reasons ?? input.signals ?? [],
       };
     } catch (error) {
       this.logger.warn(`Risk service unavailable, using fallback: ${String(error)}`);

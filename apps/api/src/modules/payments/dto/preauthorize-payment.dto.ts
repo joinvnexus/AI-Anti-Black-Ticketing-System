@@ -7,7 +7,23 @@ export class PreauthorizePaymentDto {
 
   @IsString()
   @IsNotEmpty()
-  holdReference!: string;
+  queueToken!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  journeyId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  deviceId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  sessionId!: string;
+
+  @IsNumber()
+  @Min(1)
+  seatCount!: number;
 
   @IsNumber()
   @Min(0)

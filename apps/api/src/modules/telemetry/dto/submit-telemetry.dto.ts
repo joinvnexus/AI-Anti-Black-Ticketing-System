@@ -9,6 +9,10 @@ export class SubmitTelemetryDto {
   @IsString()
   sessionId?: string;
 
+  @IsOptional()
+  @IsString()
+  riskAssessmentId?: string;
+
   @IsString()
   @IsNotEmpty()
   deviceId!: string;

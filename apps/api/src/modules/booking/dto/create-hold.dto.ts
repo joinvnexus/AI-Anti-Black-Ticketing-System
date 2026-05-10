@@ -13,6 +13,18 @@ export class CreateHoldDto {
   @IsNotEmpty()
   queueToken!: string;
 
+  @IsString()
+  @IsNotEmpty()
+  paymentReference!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  deviceId!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  sessionId!: string;
+
   @IsInt()
   @Min(1)
   @Max(2)

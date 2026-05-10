@@ -1,4 +1,4 @@
-import { IsInt, IsNotEmpty, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsNotEmpty, IsOptional, IsString, Max, Min } from 'class-validator';
 
 export class JoinQueueDto {
   @IsString()
@@ -12,6 +12,14 @@ export class JoinQueueDto {
   @IsString()
   @IsNotEmpty()
   deviceId!: string;
+
+  @IsOptional()
+  @IsString()
+  sessionId?: string;
+
+  @IsOptional()
+  @IsString()
+  telemetrySnapshotId?: string;
 
   @IsInt()
   @Min(0)

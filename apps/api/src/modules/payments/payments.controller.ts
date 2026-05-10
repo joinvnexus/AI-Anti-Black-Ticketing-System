@@ -14,7 +14,7 @@ export class PaymentsController {
   ) {
     return this.paymentsService.preauthorize(
       dto,
-      idempotencyKey ?? `${dto.holdReference}:${dto.amount}:${dto.provider}`,
+      idempotencyKey ?? `${dto.queueToken}:${dto.amount}:${dto.provider}`,
     );
   }
 
@@ -22,8 +22,15 @@ export class PaymentsController {
   callback(
     @Body() dto: PaymentCallbackDto,
     @Headers('x-payment-signature') signature?: string,
+    @Headers('x-request-id') requestId?: string,
+    @Headers('x-request-timestamp') requestTimestamp?: string,
   ) {
     const rawPayload = JSON.stringify(dto);
-    return this.paymentsService.callback(dto, signature ?? '', rawPayload);
+    return this.paymentsService.callback(dto, {
+      signature: signature ?? '',
+      rawPayload,
+      requestId: requestId ?? `${dto.paymentReference}:${dto.status}`,
+      requestTimestamp: requestTimestamp ?? '',
+    });
   }
 }

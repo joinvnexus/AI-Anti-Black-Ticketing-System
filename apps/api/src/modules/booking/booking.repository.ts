@@ -8,7 +8,7 @@ type SeatHoldRecord = {
   journey_id: string;
   queue_token: string | null;
   seat_count: number;
-  status: 'held' | 'confirmed';
+  status: 'held' | 'confirmed' | 'expired';
   expires_at: Date;
 };
 
@@ -24,16 +24,17 @@ export class BookingRepository {
     userId: string;
     journeyId: string;
     holdReference: string;
+    queueToken: string;
     seatCount: number;
     expiresAt: Date;
   }) {
     const result = await this.databaseService.query<SeatHoldRecord>(
       `
-        INSERT INTO seat_holds (user_id, journey_id, hold_reference, seat_count, expires_at)
-        VALUES ($1, $2, $3, $4, $5)
+        INSERT INTO seat_holds (user_id, journey_id, hold_reference, queue_token, seat_count, expires_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id, hold_reference, user_id, journey_id, queue_token, seat_count, status, expires_at
       `,
-      [input.userId, input.journeyId, input.holdReference, input.seatCount, input.expiresAt],
+      [input.userId, input.journeyId, input.holdReference, input.queueToken, input.seatCount, input.expiresAt],
     );
 
     return result.rows[0];
@@ -57,6 +58,17 @@ export class BookingRepository {
       `
         UPDATE seat_holds
         SET status = 'confirmed'
+        WHERE hold_reference = $1
+      `,
+      [holdReference],
+    );
+  }
+
+  async expireHold(holdReference: string) {
+    await this.databaseService.query(
+      `
+        UPDATE seat_holds
+        SET status = 'expired'
         WHERE hold_reference = $1
       `,
       [holdReference],
@@ -119,7 +131,7 @@ export class BookingRepository {
     }>(
       `
         UPDATE bookings
-        SET status = 'cancelled'
+        SET status = 'cancelled', cancelled_at = NOW()
         WHERE id = $1
         RETURNING id, user_id, journey_id, status
       `,
@@ -190,12 +202,51 @@ export class BookingRepository {
         WHERE journey_id = $1
           AND status IN ('eligible', 'waiting')
           AND expires_at > NOW()
-        ORDER BY priority_score DESC, created_at ASC
+        ORDER BY queue_bucket ASC, priority_score DESC, created_at ASC, token ASC
         LIMIT 1
       `,
       [journeyId],
     );
 
     return result.rows[0] ?? null;
+  }
+
+  async decrementJourneyAvailability(journeyId: string, seatCount: number) {
+    const result = await this.databaseService.query<{ id: string; available_seats: number }>(
+      `
+        UPDATE journeys
+        SET available_seats = available_seats - $2
+        WHERE id = $1 AND available_seats >= $2
+        RETURNING id, available_seats
+      `,
+      [journeyId, seatCount],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  async incrementJourneyAvailability(journeyId: string, seatCount: number) {
+    await this.databaseService.query(
+      `
+        UPDATE journeys
+        SET available_seats = available_seats + $2
+        WHERE id = $1
+      `,
+      [journeyId, seatCount],
+    );
+  }
+
+  async incrementBookingLimit(userId: string) {
+    await this.databaseService.query(
+      `
+        UPDATE booking_limits
+        SET weekly_booked_count = weekly_booked_count + 1,
+          monthly_booked_count = monthly_booked_count + 1,
+          last_booking_at = NOW(),
+          updated_at = NOW()
+        WHERE user_id = $1
+      `,
+      [userId],
+    );
   }
 }

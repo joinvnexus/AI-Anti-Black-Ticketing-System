@@ -17,4 +17,8 @@ export class PaymentCallbackDto {
   @IsOptional()
   @IsString()
   providerReference?: string;
+
+  @IsOptional()
+  @IsString()
+  gatewayReference?: string;
 }

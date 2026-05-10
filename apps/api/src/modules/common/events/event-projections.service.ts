@@ -24,15 +24,25 @@ export class EventProjectionsService {
     } else if (topic === 'risk.assessment.v1' && event.eventType === 'risk.assessment.completed') {
       await this.databaseService.query(
         `
-          INSERT INTO risk_assessments (user_id, score, band, reasons, payload)
-          VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+          INSERT INTO risk_assessments (
+            user_id, session_id, subject_id, subject_type, score, band, reasons, payload,
+            telemetry_snapshot_id, inference_request, inference_response, model_version
+          )
+          VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10::jsonb, $11::jsonb, $12)
         `,
         [
           null,
+          null,
+          event.payload.subjectId,
+          event.payload.subjectType,
           event.payload.score,
           event.payload.band,
           JSON.stringify(event.payload.reasons),
           JSON.stringify(event.payload),
+          null,
+          JSON.stringify({ topic, eventType: event.eventType }),
+          JSON.stringify(event.payload),
+          'phase2-api-v1',
         ],
       );
     }
@@ -53,6 +63,18 @@ export class EventProjectionsService {
       ]);
     }
 
+    if (topic === 'queue.state.v1' && event.eventType === 'queue.joined') {
+      await this.fraudGraphService.sync([
+        {
+          fromType: 'account',
+          fromId: event.payload.userId,
+          toType: 'payment',
+          toId: event.payload.token,
+          relationship: 'JOINED_QUEUE',
+        },
+      ]);
+    }
+
     if (topic === 'booking.lifecycle.v1' && event.eventType === 'booking.confirmed' && event.payload.paymentReference) {
       await this.fraudGraphService.sync([
         {
@@ -60,7 +82,7 @@ export class EventProjectionsService {
           fromId: event.payload.userId,
           toType: 'payment',
           toId: event.payload.paymentReference,
-          relationship: 'USED_PAYMENT',
+          relationship: 'PAID_WITH',
         },
       ]);
     }

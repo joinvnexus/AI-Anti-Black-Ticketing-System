@@ -34,6 +34,7 @@ export class AuthService {
     };
 
     if (this.authRepository.enabled) {
+      await this.authRepository.invalidateActiveChallenges(nidHash, dto.deviceId);
       const row = await this.authRepository.createOtpChallenge({
         nidHash,
         phone: dto.phone,
@@ -102,7 +103,7 @@ export class AuthService {
         trustScore: 60,
       });
 
-      await this.authRepository.createSession({
+      const session = await this.authRepository.createSession({
         userId: user.id,
         deviceId: challenge.deviceId,
         ipAddress: '0.0.0.0',
@@ -112,6 +113,7 @@ export class AuthService {
 
       return {
         userId: user.id,
+        sessionId: session.id,
         accessToken: `access_${randomUUID()}`,
         refreshToken: `refresh_${randomUUID()}`,
         deviceTrustScore: 60,
@@ -123,6 +125,7 @@ export class AuthService {
 
     return {
       userId: randomUUID(),
+      sessionId: randomUUID(),
       accessToken: `access_${randomUUID()}`,
       refreshToken: `refresh_${randomUUID()}`,
       deviceTrustScore: 60,

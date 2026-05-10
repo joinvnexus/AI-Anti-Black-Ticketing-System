@@ -92,6 +92,24 @@ export class QueueRepository {
     return result.rows[0] ?? null;
   }
 
+  async consumeReservation(token: string) {
+    const result = await this.databaseService.query<QueueTokenRecord>(
+      `
+        UPDATE queue_tokens
+        SET status = 'expired', reservation_consumed_at = NOW()
+        WHERE token = $1
+          AND status = 'reserved'
+          AND reservation_expires_at IS NOT NULL
+          AND reservation_expires_at > NOW()
+        RETURNING token, user_id, journey_id, device_id, device_trust_score, risk_score, queue_bucket,
+          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at
+      `,
+      [token],
+    );
+
+    return result.rows[0] ?? null;
+  }
+
   async getDeviceTrust(userId: string, deviceId: string) {
     const result = await this.databaseService.query<{ trust_score: number }>(
       `
@@ -153,7 +171,7 @@ export class QueueRepository {
           WHERE journey_id = $1
             AND status IN ('eligible', 'waiting')
             AND expires_at > NOW()
-          ORDER BY priority_score DESC, created_at ASC
+          ORDER BY queue_bucket ASC, priority_score DESC, created_at ASC, token ASC
           LIMIT 1
         )
         RETURNING token, user_id, journey_id, device_id, device_trust_score, risk_score, queue_bucket,
