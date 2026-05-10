@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { KAFKA_TOPICS, QueueStateEvent, RiskAssessmentEvent } from '../../contracts/domain-events';
 import { AuditService } from '../common/audit/audit.service';
@@ -45,8 +46,13 @@ type QueueStatusView = {
 @Injectable()
 export class QueueService {
   private readonly tokens = new Map<string, QueueToken>();
+  private readonly routeConfig: Record<
+    string,
+    { maxQueueBucket: number; priorityBias: number; cooldownMinutes: number; capacity: number }
+  >;
 
   constructor(
+    configService: ConfigService,
     private readonly riskClientService: RiskClientService,
     private readonly queueRepository: QueueRepository,
     private readonly auditService: AuditService,
@@ -54,7 +60,12 @@ export class QueueService {
     private readonly telemetryService: TelemetryService,
     private readonly sessionSecurityService: SessionSecurityService,
     private readonly fraudGraphService: FraudGraphService,
-  ) {}
+  ) {
+    this.routeConfig =
+      configService.get<Record<string, { maxQueueBucket: number; priorityBias: number; cooldownMinutes: number; capacity: number }>>(
+        'QUEUE_ROUTE_CONFIG',
+      ) ?? {};
+  }
 
   async join(dto: JoinQueueDto) {
     await this.sessionSecurityService.validate({
@@ -89,6 +100,12 @@ export class QueueService {
       dto.networkRisk,
       this.fraudGraphService.scoreAccountNetworkRisk(dto.userId, dto.deviceId),
     );
+    const routePolicy = this.routeConfig[dto.journeyId] ?? this.routeConfig.default ?? {
+      maxQueueBucket: 3,
+      priorityBias: 0,
+      cooldownMinutes: 15,
+      capacity: 300,
+    };
 
     const risk = await this.riskClientService.score({
       deviceRisk: dto.deviceRisk,
@@ -117,7 +134,14 @@ export class QueueService {
       (bookingLimit?.monthly_booked_count ?? 0) >= (bookingLimit?.monthly_limit ?? Number.MAX_SAFE_INTEGER);
 
     const eligible = !activeCooldown && !limitBlocked && risk.score < 86 && deviceTrustScore >= 20;
-    const priorityScore = Math.max(0, 100 - risk.score + Math.round(deviceTrustScore * 0.6));
+    const fairnessCredit = Math.max(
+      0,
+      20 - ((bookingLimit?.weekly_booked_count ?? 0) * 3 + (bookingLimit?.monthly_booked_count ?? 0)),
+    );
+    const priorityScore = Math.max(
+      0,
+      100 - risk.score + Math.round(deviceTrustScore * 0.6) + fairnessCredit + routePolicy.priorityBias,
+    );
     const eligibilityReason = activeCooldown
       ? `cooldown:${activeCooldown.reason}`
       : limitBlocked
@@ -142,7 +166,7 @@ export class QueueService {
       deviceTrustScore,
       riskScore: risk.score,
       priorityScore,
-      queueBucket: eligible ? 1 : risk.score >= 71 ? 3 : 2,
+      queueBucket: Math.min(routePolicy.maxQueueBucket, eligible ? 1 : risk.score >= 71 ? 3 : 2),
       eligibilityReason,
       telemetrySnapshotId: null,
       reservationExpiresAt: null,
@@ -217,6 +241,8 @@ export class QueueService {
         deviceTrustScore: entry.deviceTrustScore,
         eligibilityReason: entry.eligibilityReason,
         telemetrySnapshotId: dto.telemetrySnapshotId ?? null,
+        fairnessCredit,
+        routeCapacity: routePolicy.capacity,
       },
     });
 
@@ -227,6 +253,8 @@ export class QueueService {
       priorityScore: entry.priorityScore,
       deviceTrustScore: entry.deviceTrustScore,
       eligibilityReason: entry.eligibilityReason,
+      fairnessCredit,
+      routeCapacity: routePolicy.capacity,
       risk: {
         score: risk.score,
         band: risk.band,
@@ -369,6 +397,23 @@ export class QueueService {
       journeyId,
       reason,
       expiresAt: expiresAt.toISOString(),
+    };
+  }
+
+  getDashboardSnapshot() {
+    const tokens = [...this.tokens.values()];
+    const total = tokens.length;
+    const reserved = tokens.filter((token) => token.status === 'reserved').length;
+    const deprioritized = tokens.filter((token) => token.status === 'deprioritized').length;
+
+    return {
+      total,
+      reserved,
+      deprioritized,
+      averageRiskScore:
+        total === 0 ? 0 : Math.round(tokens.reduce((sum, token) => sum + token.riskScore, 0) / total),
+      waitTimeSecondsP50: total === 0 ? 0 : 120,
+      conversionRate: total === 0 ? 0 : Number(((reserved / total) * 100).toFixed(2)),
     };
   }
 }

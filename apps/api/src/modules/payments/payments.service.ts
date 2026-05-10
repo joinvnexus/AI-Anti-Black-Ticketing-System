@@ -6,7 +6,9 @@ import { KafkaProducerService } from '../common/events/kafka-producer.service';
 import { IdempotencyService } from '../common/security/idempotency.service';
 import { SessionSecurityService } from '../common/security/session-security.service';
 import { SignatureService } from '../common/security/signature.service';
+import { FraudGraphService } from '../fraud-graph/fraud-graph.service';
 import { QueueRepository } from '../queue/queue.repository';
+import { QueueService } from '../queue/queue.service';
 import { PaymentCallbackDto } from './dto/payment-callback.dto';
 import { PreauthorizePaymentDto } from './dto/preauthorize-payment.dto';
 import { PaymentsRepository } from './payments.repository';
@@ -14,6 +16,7 @@ import { PaymentsRepository } from './payments.repository';
 @Injectable()
 export class PaymentsService {
   private readonly memoryPayments = new Map<string, Record<string, unknown>>();
+  private readonly paymentIdentityReuse = new Map<string, Set<string>>();
 
   constructor(
     private readonly paymentsRepository: PaymentsRepository,
@@ -23,6 +26,8 @@ export class PaymentsService {
     private readonly kafkaProducerService: KafkaProducerService,
     private readonly sessionSecurityService: SessionSecurityService,
     private readonly queueRepository: QueueRepository,
+    private readonly queueService: QueueService,
+    private readonly fraudGraphService: FraudGraphService,
   ) {}
 
   async preauthorize(dto: PreauthorizePaymentDto, idempotencyKey: string) {
@@ -59,6 +64,19 @@ export class PaymentsService {
       amount: dto.amount,
     });
     const callbackSignature = this.signatureService.sign(callbackPayload);
+    const paymentIdentity =
+      dto.paymentIdentity ?? `${dto.provider}:${dto.walletId ?? dto.phone ?? dto.deviceId}`;
+    const reuseCount = this.trackPaymentIdentity(paymentIdentity, dto.userId);
+
+    await this.fraudGraphService.sync([
+      {
+        fromType: 'account',
+        fromId: dto.userId,
+        toType: 'payment',
+        toId: paymentIdentity,
+        relationship: 'USES_WALLET',
+      },
+    ]);
 
     if (this.paymentsRepository.enabled) {
       await this.paymentsRepository.createArtifact({
@@ -71,6 +89,7 @@ export class PaymentsService {
         callbackSignature,
         seatCount: dto.seatCount,
         journeyId: dto.journeyId,
+        paymentIdentity,
       });
     } else {
       this.memoryPayments.set(paymentReference, {
@@ -79,6 +98,7 @@ export class PaymentsService {
         queueToken: dto.queueToken,
         amount: dto.amount,
         status: 'initiated',
+        paymentIdentity,
       });
     }
 
@@ -88,6 +108,8 @@ export class PaymentsService {
       provider: dto.provider,
       status: 'pending_callback',
       callbackSignature,
+      paymentIdentity,
+      paymentRisk: Math.min(100, reuseCount * 20),
     };
 
     const event: PaymentLifecycleEvent = {
@@ -120,6 +142,8 @@ export class PaymentsService {
         journeyId: dto.journeyId,
         amount: dto.amount,
         provider: dto.provider,
+        paymentIdentity,
+        reuseCount,
       },
     });
     await this.idempotencyService.complete('payment.preauthorize', idempotencyKey, response);
@@ -196,6 +220,24 @@ export class PaymentsService {
     };
 
     await this.kafkaProducerService.publish(KAFKA_TOPICS.paymentLifecycle, event);
+    if (dto.status === 'failed' || dto.status === 'chargeback') {
+      await this.fraudGraphService.registerPaymentIncident({
+        paymentReference: dto.paymentReference,
+        accountId: eventPayload.userId,
+        incident: dto.status === 'chargeback' ? 'chargeback' : 'payment_failed',
+      });
+    }
+
+    if ((dto.status === 'failed' || dto.status === 'chargeback') && eventPayload.journeyId) {
+      await this.queueService.cooldown(
+        eventPayload.userId,
+        eventPayload.journeyId,
+        'payment-device',
+        dto.status === 'chargeback' ? 'chargeback_cooldown' : 'payment_failed_cooldown',
+        dto.status === 'chargeback' ? 60 : 15,
+      );
+    }
+
     await this.auditService.record({
       action: 'payment.callback',
       resourceType: 'payment_artifact',
@@ -228,5 +270,12 @@ export class PaymentsService {
     if (Number.isNaN(timestamp) || Math.abs(Date.now() - timestamp) > 5 * 60 * 1000) {
       throw new BadRequestException('Expired callback timestamp');
     }
+  }
+
+  private trackPaymentIdentity(paymentIdentity: string, userId: string) {
+    const users = this.paymentIdentityReuse.get(paymentIdentity) ?? new Set<string>();
+    users.add(userId);
+    this.paymentIdentityReuse.set(paymentIdentity, users);
+    return users.size;
   }
 }

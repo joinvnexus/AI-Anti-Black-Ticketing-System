@@ -1,4 +1,4 @@
-import { Controller, Get, Param } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { FraudGraphService } from './fraud-graph.service';
 
 @Controller('v1/fraud-graph')
@@ -12,10 +12,23 @@ export class FraudGraphController {
 
   @Get('clusters/:accountId')
   clusters(@Param('accountId') accountId: string) {
-    return {
-      accountId,
-      cluster: this.fraudGraphService.getClusters(accountId),
-      networkRisk: this.fraudGraphService.scoreAccountNetworkRisk(accountId),
-    };
+    return this.fraudGraphService.getClusters(accountId);
+  }
+
+  @Get('explain/:accountId')
+  explain(@Param('accountId') accountId: string) {
+    return this.fraudGraphService.getExplainability(accountId);
+  }
+
+  @Post('payment-incident')
+  paymentIncident(
+    @Body()
+    body: {
+      paymentReference: string;
+      accountId: string;
+      incident: 'payment_failed' | 'chargeback';
+    },
+  ) {
+    return this.fraudGraphService.registerPaymentIncident(body);
   }
 }

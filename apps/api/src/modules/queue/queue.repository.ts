@@ -15,6 +15,7 @@ type QueueTokenRecord = {
   reservation_expires_at: Date | null;
   status: 'waiting' | 'deprioritized' | 'eligible' | 'reserved' | 'expired';
   expires_at: Date;
+  created_at?: Date;
 };
 
 @Injectable()
@@ -57,7 +58,7 @@ export class QueueRepository {
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         RETURNING token, user_id, journey_id, device_id, device_trust_score, risk_score, queue_bucket,
-          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at
+          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at, created_at
       `,
       [
         input.userId,
@@ -82,7 +83,7 @@ export class QueueRepository {
     const result = await this.databaseService.query<QueueTokenRecord>(
       `
         SELECT token, user_id, journey_id, device_id, device_trust_score, risk_score, queue_bucket,
-          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at
+          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at, created_at
         FROM queue_tokens
         WHERE token = $1
       `,
@@ -102,7 +103,7 @@ export class QueueRepository {
           AND reservation_expires_at IS NOT NULL
           AND reservation_expires_at > NOW()
         RETURNING token, user_id, journey_id, device_id, device_trust_score, risk_score, queue_bucket,
-          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at
+          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at, created_at
       `,
       [token],
     );
@@ -175,7 +176,7 @@ export class QueueRepository {
           LIMIT 1
         )
         RETURNING token, user_id, journey_id, device_id, device_trust_score, risk_score, queue_bucket,
-          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at
+          priority_score, eligibility_reason, telemetry_snapshot_id, reservation_expires_at, status, expires_at, created_at
       `,
       [journeyId, reservationExpiresAt],
     );

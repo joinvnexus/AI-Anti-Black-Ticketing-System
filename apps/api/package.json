@@ -7,7 +7,9 @@
     "start:dev": "nest start --watch",
     "build": "nest build",
     "phase2:smoke": "node scripts/phase2-smoke.mjs",
-    "phase2:abuse": "node scripts/phase2-abuse.mjs"
+    "phase2:abuse": "node scripts/phase2-abuse.mjs",
+    "phase3:load": "node scripts/phase3-load.mjs",
+    "phase3:chaos": "node scripts/phase3-chaos.mjs"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.2",

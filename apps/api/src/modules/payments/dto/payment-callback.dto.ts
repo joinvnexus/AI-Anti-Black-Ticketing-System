@@ -6,8 +6,8 @@ export class PaymentCallbackDto {
   paymentReference!: string;
 
   @IsString()
-  @IsIn(['authorized', 'failed'])
-  status!: 'authorized' | 'failed';
+  @IsIn(['authorized', 'failed', 'refunded', 'chargeback'])
+  status!: 'authorized' | 'failed' | 'refunded' | 'chargeback';
 
   @IsOptional()
   @IsNumber()

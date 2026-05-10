@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { FeatureVectorEvent, KAFKA_TOPICS } from '../../contracts/domain-events';
 import { AuditService } from '../common/audit/audit.service';
+import { KafkaProducerService } from '../common/events/kafka-producer.service';
 import { SubmitTelemetryDto } from './dto/submit-telemetry.dto';
 import { TelemetryRepository } from './telemetry.repository';
 
@@ -10,19 +13,23 @@ export class TelemetryService {
   constructor(
     private readonly telemetryRepository: TelemetryRepository,
     private readonly auditService: AuditService,
+    private readonly kafkaProducerService: KafkaProducerService,
   ) {}
 
   async submit(dto: SubmitTelemetryDto) {
     const extractedSignals = this.extractSignals(dto);
     const riskHint = this.calculateRiskHint(dto, extractedSignals);
+    const featureVector = this.buildFeatureVector(dto, riskHint);
 
     if (!this.telemetryRepository.enabled) {
       const id = `${dto.deviceId}:${Date.now()}`;
-      this.memorySnapshots.set(id, { ...dto, riskHint, extractedSignals });
+      this.memorySnapshots.set(id, { ...dto, riskHint, extractedSignals, featureVector });
+      await this.publishFeatureVector(id, dto, featureVector, extractedSignals);
       return {
         snapshotId: id,
         riskHint,
         extractedSignals,
+        featureVector,
       };
     }
 
@@ -42,8 +49,10 @@ export class TelemetryService {
         hesitationScore: dto.hesitationScore,
         formFillMs: dto.formFillMs,
         pageDwellMs: dto.pageDwellMs,
+        featureVector,
       },
     });
+    await this.publishFeatureVector(snapshot.id, dto, featureVector, extractedSignals);
 
     await this.auditService.record({
       actorUserId: dto.userId,
@@ -55,6 +64,7 @@ export class TelemetryService {
         deviceId: dto.deviceId,
         riskHint,
         extractedSignals,
+        featureVector,
       },
     });
 
@@ -63,6 +73,7 @@ export class TelemetryService {
       createdAt: snapshot.created_at.toISOString(),
       riskHint,
       extractedSignals,
+      featureVector,
     };
   }
 
@@ -77,6 +88,38 @@ export class TelemetryService {
     }
 
     return this.telemetryRepository.findById(snapshotId);
+  }
+
+  async getFeatureVector(snapshotId: string) {
+    const snapshot = await this.findSnapshot(snapshotId);
+
+    if (!snapshot) {
+      return {
+        found: false,
+      };
+    }
+
+    if ('featureVector' in snapshot) {
+      return {
+        found: true,
+        snapshotId,
+        featureVector: snapshot.featureVector,
+      };
+    }
+
+    const rawPayload =
+      'raw_payload' in snapshot && snapshot.raw_payload
+        ? snapshot.raw_payload
+        : {};
+
+    return {
+      found: true,
+      snapshotId,
+      featureVector:
+        typeof rawPayload === 'object' && rawPayload && 'featureVector' in rawPayload
+          ? rawPayload.featureVector
+          : null,
+    };
   }
 
   private calculateRiskHint(dto: SubmitTelemetryDto, extractedSignals: string[]) {
@@ -116,5 +159,47 @@ export class TelemetryService {
     }
 
     return signals;
+  }
+
+  private buildFeatureVector(dto: SubmitTelemetryDto, riskHint: number) {
+    return {
+      mouseToClickRatio:
+        dto.clickCount === 0
+          ? dto.mouseMovements
+          : Number((dto.mouseMovements / dto.clickCount).toFixed(2)),
+      typingSpeedCpm: dto.typingSpeedCpm,
+      focusSwitchCount: dto.focusSwitchCount,
+      pasteCount: dto.pasteCount,
+      hesitationScore: dto.hesitationScore,
+      formFillSeconds: Number((dto.formFillMs / 1000).toFixed(2)),
+      dwellSeconds: Number((dto.pageDwellMs / 1000).toFixed(2)),
+      riskHint,
+    };
+  }
+
+  private async publishFeatureVector(
+    snapshotId: string,
+    dto: SubmitTelemetryDto,
+    featureVector: Record<string, number>,
+    extractedSignals: string[],
+  ) {
+    const event: FeatureVectorEvent = {
+      eventId: randomUUID(),
+      eventType: 'feature.vector.created',
+      occurredAt: new Date().toISOString(),
+      traceId: snapshotId,
+      version: 1,
+      producer: 'api',
+      payload: {
+        snapshotId,
+        userId: dto.userId ?? null,
+        journeyId: dto.journeyId ?? null,
+        deviceId: dto.deviceId,
+        vector: featureVector,
+        signals: extractedSignals,
+      },
+    };
+
+    await this.kafkaProducerService.publish(KAFKA_TOPICS.featureVectors, event);
   }
 }

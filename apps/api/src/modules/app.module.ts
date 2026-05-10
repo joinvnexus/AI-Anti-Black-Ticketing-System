@@ -13,6 +13,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { QueueModule } from './queue/queue.module';
 import { RiskModule } from './risk/risk.module';
 import { TelemetryModule } from './telemetry/telemetry.module';
+import { MonitoringModule } from './monitoring/monitoring.module';
 
 @Module({
   imports: [
@@ -32,6 +33,7 @@ import { TelemetryModule } from './telemetry/telemetry.module';
     TelemetryModule,
     DevicesModule,
     PaymentsModule,
+    MonitoringModule,
   ],
 })
 export class AppModule {}

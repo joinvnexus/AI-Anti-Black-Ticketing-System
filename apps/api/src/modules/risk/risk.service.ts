@@ -1,16 +1,29 @@
 import { Injectable } from '@nestjs/common';
 import { ScoreRiskDto } from './dto/score-risk.dto';
+import { ModelRegistryService } from './model-registry.service';
+import { RiskFeatureService } from './risk-feature.service';
+import { RiskMonitoringService } from './risk-monitoring.service';
 
 @Injectable()
 export class RiskService {
+  constructor(
+    private readonly riskFeatureService: RiskFeatureService,
+    private readonly modelRegistryService: ModelRegistryService,
+    private readonly riskMonitoringService: RiskMonitoringService,
+  ) {}
+
   score(input: ScoreRiskDto) {
-    const baseScore = Math.round(
-      input.deviceRisk * 0.25 +
-        input.behaviorRisk * 0.25 +
-        Math.max(input.networkRisk, input.syndicateRisk ?? 0) * 0.15 +
-        input.accountRisk * 0.15 +
-        input.bookingRisk * 0.1 +
-        input.paymentRisk * 0.1,
+    const startedAt = Date.now();
+    const features = this.riskFeatureService.extract(input);
+    const rawScore = Math.round(
+      input.deviceRisk * 0.16 +
+        input.behaviorRisk * 0.14 +
+        input.accountRisk * 0.1 +
+        input.bookingRisk * 0.08 +
+        input.paymentRisk * 0.08 +
+        features.modelSignals.botScore * 0.18 +
+        features.modelSignals.anomalyScore * 0.16 +
+        features.modelSignals.graphScore * 0.1,
     );
     const telemetryPenalty = Math.round((input.telemetryRiskHint ?? 0) * 0.2);
     const trustOffset = Math.round(((input.deviceTrustScore ?? 50) - 50) * -0.3);
@@ -18,10 +31,27 @@ export class RiskService {
       15,
       Math.round(((input.weeklyBookingCount ?? 0) + (input.monthlyBookingCount ?? 0) / 4) * 2),
     );
-    const score = Math.max(0, Math.min(100, baseScore + telemetryPenalty + trustOffset + bookingPressure));
+    const score = Math.max(
+      0,
+      Math.min(
+        100,
+        this.riskFeatureService.calibrate(
+          rawScore + telemetryPenalty + trustOffset + bookingPressure,
+        ),
+      ),
+    );
 
     const band = this.getBand(score);
     const actions = this.getActions(score);
+    const latencyMs = Date.now() - startedAt;
+
+    this.riskMonitoringService.record({
+      score,
+      latencyMs,
+      botScore: features.modelSignals.botScore,
+      anomalyScore: features.modelSignals.anomalyScore,
+      graphScore: features.modelSignals.graphScore,
+    });
 
     return {
       score,
@@ -34,9 +64,12 @@ export class RiskService {
         requiresStepUp: score >= 51,
       },
       modelFindings: {
-        botLikelihood: Math.min(100, Math.round((input.behaviorRisk + (input.telemetryRiskHint ?? 0)) / 2)),
-        anomalyLikelihood: Math.min(100, Math.round((input.networkRisk + input.accountRisk) / 2)),
+        botLikelihood: features.modelSignals.botScore,
+        anomalyLikelihood: features.modelSignals.anomalyScore,
+        graphLikelihood: features.modelSignals.graphScore,
       },
+      modelRegistry: this.modelRegistryService.getActiveVersions(),
+      featureVector: features.vector,
       reasons: input.signals ?? [],
     };
   }

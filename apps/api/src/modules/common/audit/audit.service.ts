@@ -39,4 +39,15 @@ export class AuditService {
       ],
     );
   }
+
+  getInvestigatorQueries() {
+    return {
+      riskOutliers:
+        "SELECT subject_id, score, band, reasons FROM risk_assessments WHERE score >= 86 ORDER BY created_at DESC LIMIT 100;",
+      chargebackLinks:
+        "SELECT payment_reference, provider_payload FROM payment_artifacts WHERE status = 'chargeback' ORDER BY updated_at DESC LIMIT 100;",
+      routeAbuse:
+        "SELECT journey_id, COUNT(*) AS cancellations FROM booking_cancellations GROUP BY journey_id ORDER BY cancellations DESC LIMIT 50;",
+    };
+  }
 }

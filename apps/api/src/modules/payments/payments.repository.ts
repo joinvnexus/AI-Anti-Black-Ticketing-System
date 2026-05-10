@@ -19,6 +19,7 @@ export class PaymentsRepository {
     callbackSignature: string;
     seatCount: number;
     journeyId: string;
+    paymentIdentity: string;
   }) {
     const result = await this.databaseService.query<{ id: string }>(
       `
@@ -45,7 +46,11 @@ export class PaymentsRepository {
         input.queueToken,
         input.amount,
         input.callbackSignature,
-        JSON.stringify({ seatCount: input.seatCount, journeyId: input.journeyId }),
+        JSON.stringify({
+          seatCount: input.seatCount,
+          journeyId: input.journeyId,
+          paymentIdentity: input.paymentIdentity,
+        }),
       ],
     );
 

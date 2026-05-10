@@ -45,6 +45,10 @@ export class EventProjectionsService {
           'phase2-api-v1',
         ],
       );
+    } else if (topic === 'feature.vector.v1' && event.eventType === 'feature.vector.created') {
+      this.logger.log(`feature vector ${event.payload.snapshotId} recorded`);
+    } else if (topic === 'monitoring.alert.v1' && event.eventType === 'monitoring.alert.raised') {
+      this.logger.warn(`alert ${event.payload.code}`);
     }
 
     await this.syncGraph(topic, event);
@@ -85,6 +89,14 @@ export class EventProjectionsService {
           relationship: 'PAID_WITH',
         },
       ]);
+    }
+
+    if (topic === 'payment.lifecycle.v1' && event.eventType === 'payment.failed') {
+      await this.fraudGraphService.registerPaymentIncident({
+        paymentReference: event.payload.paymentReference,
+        accountId: event.payload.userId,
+        incident: 'payment_failed',
+      });
     }
   }
 }

@@ -1,4 +1,4 @@
-import { IsIn, IsNotEmpty, IsNumber, IsString, Min } from 'class-validator';
+import { IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
 
 export class PreauthorizePaymentDto {
   @IsString()
@@ -32,4 +32,16 @@ export class PreauthorizePaymentDto {
   @IsString()
   @IsIn(['sslcommerz', 'bkash', 'nagad'])
   provider!: 'sslcommerz' | 'bkash' | 'nagad';
+
+  @IsOptional()
+  @IsString()
+  paymentIdentity?: string;
+
+  @IsOptional()
+  @IsString()
+  walletId?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
 }

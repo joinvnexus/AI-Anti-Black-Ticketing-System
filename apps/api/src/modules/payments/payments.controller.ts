@@ -1,4 +1,5 @@
-import { Body, Controller, Headers, Post } from '@nestjs/common';
+import { Body, Controller, Headers, Post, UseGuards } from '@nestjs/common';
+import { RequestSignatureGuard } from '../common/security/request-signature.guard';
 import { PaymentCallbackDto } from './dto/payment-callback.dto';
 import { PreauthorizePaymentDto } from './dto/preauthorize-payment.dto';
 import { PaymentsService } from './payments.service';
@@ -8,6 +9,7 @@ export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
   @Post('preauthorize')
+  @UseGuards(RequestSignatureGuard)
   preauthorize(
     @Body() dto: PreauthorizePaymentDto,
     @Headers('idempotency-key') idempotencyKey?: string,
@@ -19,6 +21,7 @@ export class PaymentsController {
   }
 
   @Post('callback')
+  @UseGuards(RequestSignatureGuard)
   callback(
     @Body() dto: PaymentCallbackDto,
     @Headers('x-payment-signature') signature?: string,

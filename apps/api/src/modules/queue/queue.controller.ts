@@ -1,4 +1,5 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import { RequestSignatureGuard } from '../common/security/request-signature.guard';
 import { JoinQueueDto } from './dto/join-queue.dto';
 import { QueueService } from './queue.service';
 
@@ -17,11 +18,13 @@ export class QueueController {
   }
 
   @Post('dequeue/:journeyId')
+  @UseGuards(RequestSignatureGuard)
   dequeue(@Param('journeyId') journeyId: string) {
     return this.queueService.dequeue(journeyId);
   }
 
   @Post('cooldown')
+  @UseGuards(RequestSignatureGuard)
   cooldown(
     @Body()
     body: {
@@ -39,5 +42,10 @@ export class QueueController {
       body.reason,
       body.minutes,
     );
+  }
+
+  @Get('dashboard')
+  dashboard() {
+    return this.queueService.getDashboardSnapshot();
   }
 }

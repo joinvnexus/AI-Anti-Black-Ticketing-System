@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { SubmitTelemetryDto } from './dto/submit-telemetry.dto';
 import { TelemetryService } from './telemetry.service';
 
@@ -9,5 +9,10 @@ export class TelemetryController {
   @Post('snapshots')
   submit(@Body() dto: SubmitTelemetryDto) {
     return this.telemetryService.submit(dto);
+  }
+
+  @Get('snapshots/:snapshotId/features')
+  features(@Param('snapshotId') snapshotId: string) {
+    return this.telemetryService.getFeatureVector(snapshotId);
   }
 }

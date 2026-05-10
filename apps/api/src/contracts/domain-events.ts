@@ -5,6 +5,8 @@ export const KAFKA_TOPICS = {
   bookingLifecycle: 'booking.lifecycle.v1',
   paymentLifecycle: 'payment.lifecycle.v1',
   cancellationLifecycle: 'cancellation.lifecycle.v1',
+  featureVectors: 'feature.vector.v1',
+  monitoringAlerts: 'monitoring.alert.v1',
 } as const;
 
 export type KafkaTopic = (typeof KAFKA_TOPICS)[keyof typeof KAFKA_TOPICS];
@@ -115,9 +117,33 @@ export type BookingLifecycleEvent = DomainEventEnvelope<
   }
 >;
 
+export type FeatureVectorEvent = DomainEventEnvelope<
+  'feature.vector.created',
+  {
+    snapshotId: string;
+    userId?: string | null;
+    journeyId?: string | null;
+    deviceId: string;
+    vector: Record<string, number>;
+    signals: string[];
+  }
+>;
+
+export type MonitoringAlertEvent = DomainEventEnvelope<
+  'monitoring.alert.raised',
+  {
+    source: 'risk' | 'queue' | 'graph';
+    code: string;
+    severity: 'info' | 'warning' | 'critical';
+    details: Record<string, unknown>;
+  }
+>;
+
 export type DomainEvent =
   | AuthVerificationEvent
   | RiskAssessmentEvent
   | QueueStateEvent
   | BookingLifecycleEvent
-  | PaymentLifecycleEvent;
+  | PaymentLifecycleEvent
+  | FeatureVectorEvent
+  | MonitoringAlertEvent;
